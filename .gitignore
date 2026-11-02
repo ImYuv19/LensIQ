@@ -1,0 +1,78 @@
+# ==========================================
+# LensIQ — Git Ignore Rules
+# The Ambitious Lens Studio by uvRaj
+# ==========================================
+
+# 1. Node & Frontend Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# 2. Python Virtual Environments & Packages
+.venv/
+backend/.venv/
+venv/
+ENV/
+env/
+*.venv
+
+# 3. Python Bytecode, Caches & Test Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# 4. Build & Bundle Outputs
+dist/
+dist-ssr/
+build/
+out/
+*.tsbuildinfo
+
+# 5. Environment Variables & Secret Credentials (CRITICAL)
+# Exclude all .env files and variants
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env
+backend/.env.*
+
+# Explicitly whitelist and track .env.example templates
+!.env.example
+!*.env.example
+!backend/.env.example
+
+# 6. Operating System & Editor Metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# 7. Logs & Temporary Debug Files
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+
+# 8. Test Fixtures (backend/tests/sample_docs/ is preserved and tracked)
+!backend/tests/sample_docs/
+!backend/tests/sample_docs/*
+
