@@ -13,12 +13,16 @@ class DocumentService {
       try {
         this.documents = JSON.parse(saved);
       } catch {
-        this.documents = [...INITIAL_DOCUMENTS];
+        this.documents = [];
       }
     } else {
-      this.documents = [...INITIAL_DOCUMENTS];
-      this.persist();
+      this.documents = [];
     }
+  }
+
+  public clearLocalCache(): void {
+    this.documents = [];
+    localStorage.removeItem(STORAGE_KEY);
   }
 
   private persist() {
@@ -28,7 +32,7 @@ class DocumentService {
   public async fetchRemoteDocuments(): Promise<DocumentItem[]> {
     try {
       const remoteDocs = await fetchApi<DocumentItem[]>('/documents/');
-      if (Array.isArray(remoteDocs) && remoteDocs.length > 0) {
+      if (Array.isArray(remoteDocs)) {
         this.documents = remoteDocs;
         this.persist();
       }

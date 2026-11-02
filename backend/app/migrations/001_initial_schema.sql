@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 
 -- 2. Documents
 CREATE TABLE IF NOT EXISTS public.documents (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     file_type TEXT NOT NULL CHECK (file_type IN ('pdf', 'docx', 'txt', 'pptx')),
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS public.documents (
 
 -- 3. Document Chunks (Vector Store)
 CREATE TABLE IF NOT EXISTS public.document_chunks (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id UUID NOT NULL REFERENCES public.documents(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     chunk_index INT NOT NULL,
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS public.document_chunks (
 
 -- 4. Conversations
 CREATE TABLE IF NOT EXISTS public.conversations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     title TEXT NOT NULL DEFAULT 'New Conversation',
     selected_doc_ids UUID[] DEFAULT ARRAY[]::UUID[],
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS public.conversations (
 
 -- 5. Messages
 CREATE TABLE IF NOT EXISTS public.messages (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     conversation_id UUID NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS public.messages (
 
 -- 6. Usage Records (Tracking Token Costs & Limits)
 CREATE TABLE IF NOT EXISTS public.usage_records (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     action_type TEXT NOT NULL CHECK (action_type IN ('question', 'upload', 'extraction')),
     provider_used TEXT CHECK (provider_used IN ('gemini', 'groq', 'openai', 'system')),
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS public.usage_records (
 
 -- 7. Document Processing Background Jobs
 CREATE TABLE IF NOT EXISTS public.processing_jobs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id UUID NOT NULL REFERENCES public.documents(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'completed', 'failed')),
@@ -103,3 +103,47 @@ CREATE TABLE IF NOT EXISTS public.processing_jobs (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 8. Automatic Profile Creation Trigger on Supabase Auth Signup
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    INSERT INTO public.profiles (
+        id,
+        email,
+        full_name,
+        avatar_url,
+        timezone,
+        plan_tier,
+        created_at,
+        updated_at
+    )
+    VALUES (
+        NEW.id,
+        NEW.email,
+        COALESCE(NEW.raw_user_meta_data->>'full_name', ''),
+        COALESCE(NEW.raw_user_meta_data->>'avatar_url', ''),
+        COALESCE(NEW.raw_user_meta_data->>'timezone', 'UTC'),
+        'Free Plan',
+        pg_catalog.now(),
+        pg_catalog.now()
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        email = EXCLUDED.email,
+        updated_at = pg_catalog.now();
+
+    RETURN NEW;
+END;
+$$;
+
+-- Restrict trigger execution strictly to postgres admin and auth engine
+REVOKE ALL ON FUNCTION public.handle_new_user() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.handle_new_user() TO postgres, supabase_auth_admin;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();

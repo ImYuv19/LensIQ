@@ -62,8 +62,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const u = await authService.signInWithGoogle();
-      setUser(u);
-      showToast('Google Sign-In successful', `Connected as ${u.email}`, 'success');
+      if (u) {
+        setUser(u);
+        showToast('Google Sign-In successful', `Connected as ${u.email}`, 'success');
+      }
+    } catch (err: any) {
+      showToast('Google Sign-In', err?.message || 'Authentication failed', 'error');
+      throw err;
     } finally {
       setIsLoading(false);
     }

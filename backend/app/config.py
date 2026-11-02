@@ -12,31 +12,43 @@ class Settings(BaseSettings):
     # CORS
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
         "http://localhost:3000",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
         "https://*.vercel.app",
     ]
 
-    # Supabase Configuration
+    # Database & Storage (Local-First Architecture)
+    DATABASE_URL: str = "postgresql://localhost:5432/lensiq_local"
+    LOCAL_JWT_SECRET: str = "lensiq-dev-local-jwt-secret-key-32bytes-min!!"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    LOCAL_STORAGE_DIR: str = "backend/data/documents"
+
+    # Cloud Supabase (Retained for Cloud Compatibility)
     SUPABASE_URL: str = ""
     SUPABASE_ANON_KEY: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     SUPABASE_JWT_SECRET: str = ""
     SUPABASE_STORAGE_BUCKET: str = "documents"
 
-    # AI Provider API Keys
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+
+    # AI Provider API Keys (Gemini Primary, Groq Generation Fallback)
     GEMINI_API_KEY: str = ""
     GROQ_API_KEY: str = ""
-    OPENAI_API_KEY: str = ""
 
     # AI Model Selection
-    GEMINI_MODEL: str = "gemini-1.5-flash"
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
-    OPENAI_MODEL: str = "gpt-4o-mini"
+    GEMINI_MODEL: str = "models/gemini-3.5-flash"
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
 
     # Embeddings Configuration
     EMBEDDING_PROVIDER: str = "gemini"
-    EMBEDDING_MODEL: str = "models/text-embedding-004"
+    EMBEDDING_MODEL: str = "models/gemini-embedding-001"
     EMBEDDING_DIMENSION: int = 768
 
     # RAG & Chunking Parameters
@@ -58,7 +70,7 @@ class Settings(BaseSettings):
     MOCK_FALLBACK_MODE: bool = False
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=("backend/.env", ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"

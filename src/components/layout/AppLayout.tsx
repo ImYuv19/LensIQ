@@ -18,7 +18,9 @@ export const AppLayout: React.FC = () => {
   const { isAuthenticated } = useAuth();
 
   // Navigation view: 'app' or 'landing'
-  const [currentView, setCurrentView] = useState<'app' | 'landing'>('app');
+  const [currentView, setCurrentView] = useState<'app' | 'landing'>(() => {
+    return isAuthenticated ? 'app' : 'landing';
+  });
 
   // Sidebar state
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -40,6 +42,15 @@ export const AppLayout: React.FC = () => {
     mode: 'signin',
   });
 
+  // Automatically keep currentView strictly aligned with authentication
+  React.useEffect(() => {
+    if (!isAuthenticated) {
+      setCurrentView('landing');
+    } else {
+      setCurrentView('app');
+    }
+  }, [isAuthenticated]);
+
   const openAuth = (mode: AuthMode = 'signin') => {
     setAuthModalState({ isOpen: true, mode });
   };
@@ -48,11 +59,18 @@ export const AppLayout: React.FC = () => {
     setAuthModalState((prev) => ({ ...prev, isOpen: false }));
   };
 
-  if (currentView === 'landing') {
+  // Protected route guard: unauthenticated users can only see the landing page
+  if (!isAuthenticated || currentView === 'landing') {
     return (
       <>
         <LandingPage
-          onGetStarted={() => setCurrentView('app')}
+          onGetStarted={() => {
+            if (isAuthenticated) {
+              setCurrentView('app');
+            } else {
+              openAuth('signin');
+            }
+          }}
           onSignIn={() => openAuth('signin')}
         />
         <AuthModal

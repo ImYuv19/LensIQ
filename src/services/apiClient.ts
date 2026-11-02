@@ -16,7 +16,11 @@ export class ApiError extends Error {
 
 export const getAuthToken = (): string | null => {
   try {
-    // 1. Check Supabase session in localStorage
+    // 1. Check local-first auth token
+    const localToken = localStorage.getItem('lensiq_auth_token');
+    if (localToken) return localToken;
+
+    // 2. Check Supabase session in localStorage
     const supabaseSession = localStorage.getItem('lensiq_supabase_token');
     if (supabaseSession) return supabaseSession;
 
@@ -34,7 +38,7 @@ export const getAuthToken = (): string | null => {
   } catch (err) {
     console.warn('Error reading auth token:', err);
   }
-  return 'mock-dev-token';
+  return null;
 };
 
 export async function fetchApi<T>(
@@ -78,10 +82,24 @@ export async function fetchApi<T>(
   return (await response.text()) as unknown as T;
 }
 
+export async function fetchBlob(endpoint: string): Promise<Blob> {
+  const token = getAuthToken();
+  const headers = new Headers();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const url = `${API_BASE}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    throw new ApiError(`Failed to fetch file: ${response.statusText}`, response.status);
+  }
+  return await response.blob();
+}
+
 export async function streamChatSse(
   endpoint: string,
   body: any,
-  onEvent: (event: { type: string; content?: string; citations?: any[]; provider?: string; messageId?: string }) => void,
+  onEvent: (event: { type: string; content?: string; citations?: any[]; provider?: string; messageId?: string; error?: string }) => void,
   onError: (err: Error) => void,
   onComplete: () => void,
   signal?: AbortSignal

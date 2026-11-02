@@ -41,8 +41,30 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
+    -- Strict Tenant Isolation Authorization Check:
+    -- 1. Allow trusted service_role via Supabase JWT auth context for backend server processing.
+    -- 2. Allow authenticated user ONLY when filter_user_id strictly equals auth.uid().
+    -- 3. Reject all cross-user or unauthenticated access attempts with 42501 (insufficient_privilege).
+    IF (
+        COALESCE(auth.role(), '') = 'service_role' 
+        OR COALESCE(auth.jwt() ->> 'role', '') = 'service_role'
+    ) THEN
+        -- Trusted service_role execution permitted
+        NULL;
+    ELSIF (
+        auth.uid() IS NOT NULL 
+        AND auth.uid() = filter_user_id
+    ) THEN
+        -- Authenticated owner querying their own document chunks
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'Access denied: Cannot query document chunks belonging to another user.'
+            USING ERRCODE = '42501';
+    END IF;
+
     RETURN QUERY
     WITH vector_matches AS (
         SELECT 
@@ -107,6 +129,10 @@ BEGIN
 END;
 $$;
 
+-- Restrict function execution permissions to authenticated users and backend service role
+REVOKE ALL ON FUNCTION match_document_chunks_hybrid(TEXT, VECTOR(768), UUID, UUID[], INT, INT, INT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION match_document_chunks_hybrid(TEXT, VECTOR(768), UUID, UUID[], INT, INT, INT) TO authenticated, service_role;
+
 -- 5. Enable Row Level Security (RLS)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY;
@@ -116,15 +142,29 @@ ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.usage_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.processing_jobs ENABLE ROW LEVEL SECURITY;
 
--- 6. RLS Policies (User Isolation)
+-- 6. RLS Policies (User Isolation — Drop first to guarantee safe repeatability)
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
 CREATE POLICY "Users can view own profile" ON public.profiles FOR SELECT USING (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
 CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Users can manage own documents" ON public.documents;
 CREATE POLICY "Users can manage own documents" ON public.documents FOR ALL USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can manage own chunks" ON public.document_chunks;
 CREATE POLICY "Users can manage own chunks" ON public.document_chunks FOR ALL USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can manage own conversations" ON public.conversations;
 CREATE POLICY "Users can manage own conversations" ON public.conversations FOR ALL USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can manage own messages" ON public.messages;
 CREATE POLICY "Users can manage own messages" ON public.messages FOR ALL USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can view own usage records" ON public.usage_records;
 CREATE POLICY "Users can view own usage records" ON public.usage_records FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can view own processing jobs" ON public.processing_jobs;
 CREATE POLICY "Users can view own processing jobs" ON public.processing_jobs FOR ALL USING (auth.uid() = user_id);
 
 -- 7. Supabase Storage Bucket Setup (Private Document Bucket)
@@ -132,15 +172,17 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('documents', 'documents', false)
 ON CONFLICT (id) DO NOTHING;
 
+DROP POLICY IF EXISTS "Users can upload documents to private folder" ON storage.objects;
 CREATE POLICY "Users can upload documents to private folder" 
 ON storage.objects FOR INSERT 
 WITH CHECK (bucket_id = 'documents' AND auth.uid()::text = (storage.foldername(name))[1]);
 
+DROP POLICY IF EXISTS "Users can read own documents" ON storage.objects;
 CREATE POLICY "Users can read own documents" 
 ON storage.objects FOR SELECT 
 USING (bucket_id = 'documents' AND auth.uid()::text = (storage.foldername(name))[1]);
 
+DROP POLICY IF EXISTS "Users can delete own documents" ON storage.objects;
 CREATE POLICY "Users can delete own documents" 
 ON storage.objects FOR DELETE 
 USING (bucket_id = 'documents' AND auth.uid()::text = (storage.foldername(name))[1]);
-

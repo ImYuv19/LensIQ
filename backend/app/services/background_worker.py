@@ -1,3 +1,4 @@
+import json
 import asyncio
 import logging
 from typing import Dict, Any, List
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 class BackgroundProcessingWorker:
     """
     Asynchronous document ingestion worker executing:
-    Extraction -> Chunking -> Embeddings -> Storage -> Ready status.
+    Extraction -> Chunking -> Embeddings -> Local Storage / Database -> Ready status.
     """
 
     @classmethod
@@ -23,7 +24,7 @@ class BackgroundProcessingWorker:
         file_bytes: bytes
     ):
         logger.info(f"Starting background processing for document: {doc_id} ({filename})")
-        
+
         # 1. Update status to 'processing'
         cls._update_document_status(doc_id, "processing", progress=15)
 
@@ -44,27 +45,31 @@ class BackgroundProcessingWorker:
             embeddings = embedding_service.get_embeddings_batch(chunk_texts)
             cls._update_document_status(doc_id, "processing", progress=85)
 
-            # 5. Store chunks in database
+            # 5. Store chunks in PostgreSQL database
             if db.is_connected:
-                chunk_records = []
-                for idx, chunk in enumerate(chunks):
-                    emb = embeddings[idx] if idx < len(embeddings) else None
-                    chunk_records.append({
-                        "document_id": doc_id,
-                        "user_id": user_id,
-                        "chunk_index": chunk.chunk_index,
-                        "content": chunk.content,
-                        "page_number": chunk.page_number,
-                        "section_title": chunk.section_title,
-                        "embedding": emb,
-                        "metadata": {"token_count": chunk.token_count}
-                    })
-
-                # Batch insert chunks
-                batch_size = 50
-                for i in range(0, len(chunk_records), batch_size):
-                    batch = chunk_records[i:i + batch_size]
-                    db.client.table("document_chunks").insert(batch).execute()
+                with db.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        for idx, chunk in enumerate(chunks):
+                            emb = embeddings[idx] if idx < len(embeddings) else None
+                            cur.execute(
+                                """
+                                INSERT INTO public.document_chunks (
+                                    document_id, user_id, chunk_index, content,
+                                    page_number, section_title, embedding, metadata
+                                )
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                """,
+                                (
+                                    doc_id,
+                                    user_id,
+                                    chunk.chunk_index,
+                                    chunk.content,
+                                    chunk.page_number,
+                                    chunk.section_title,
+                                    emb,
+                                    json.dumps({"token_count": chunk.token_count})
+                                )
+                            )
 
             # 6. Mark Document as Ready
             summary = pages[0].text[:180].replace("\n", " ").strip() if pages else "Document indexed successfully."
@@ -87,19 +92,20 @@ class BackgroundProcessingWorker:
     ):
         if db.is_connected:
             try:
-                payload = {
-                    "status": status,
-                    "progress": progress,
-                    "error_message": error_message
-                }
-                if page_count is not None:
-                    payload["page_count"] = page_count
-                if summary is not None:
-                    payload["summary"] = summary
-
-                db.client.table("documents").update(payload).eq("id", doc_id).execute()
+                db.execute(
+                    """
+                    UPDATE public.documents
+                    SET status = %s,
+                        progress = %s,
+                        page_count = COALESCE(%s, page_count),
+                        summary = COALESCE(%s, summary),
+                        error_message = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (status, progress, page_count, summary, error_message, doc_id)
+                )
             except Exception as e:
                 logger.error(f"Failed to update document status in DB: {e}")
 
 background_worker = BackgroundProcessingWorker()
-

@@ -76,3 +76,6 @@ pnpm-debug.log*
 !backend/tests/sample_docs/
 !backend/tests/sample_docs/*
 
+# 9. Local Document Storage
+backend/data/
+

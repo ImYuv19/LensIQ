@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { ChatMessage, Citation, Conversation, ResponsePreference } from '../types/chat';
 import { chatService } from '../services/chatService';
 import { authService } from '../services/authService';
+import { useAuth } from './AuthContext';
 import { useDocuments } from './DocumentContext';
 import { useToast } from './ToastContext';
 
@@ -48,29 +49,57 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const isInitializedRef = useRef(false);
 
+  const { isAuthenticated } = useAuth();
   const { selectedDocIds, documents, selectAllDocs } = useDocuments();
   const { showToast } = useToast();
 
   const refreshConversations = useCallback(() => {
+    if (!isAuthenticated) {
+      setConversations([]);
+      return [];
+    }
     const list = chatService.getConversations();
     setConversations(list);
     return list;
-  }, []);
+  }, [isAuthenticated]);
 
-  // Initialize once on mount
-  useEffect(() => {
-    const list = refreshConversations();
-    if (!isInitializedRef.current) {
-      isInitializedRef.current = true;
-      if (list.length > 0) {
-        setActiveConversationId(list[0].id);
-        setMessages(chatService.getMessages(list[0].id));
-      } else {
-        setActiveConversationId('draft');
-        setMessages([]);
-      }
+  const syncRemoteConversations = useCallback(async () => {
+    if (!isAuthenticated) return;
+    try {
+      await chatService.fetchRemoteConversations();
+      refreshConversations();
+    } catch (err) {
+      console.warn('Sync remote conversations note:', err);
     }
-  }, [refreshConversations]);
+  }, [isAuthenticated, refreshConversations]);
+
+  // Handle auth changes and initialization
+  useEffect(() => {
+    if (!isAuthenticated) {
+      chatService.clearLocalCache();
+      setConversations([]);
+      setActiveConversationId(null);
+      setMessages([]);
+      setStreamingMessageText('');
+      setStreamingCitations([]);
+      isInitializedRef.current = false;
+      return;
+    }
+
+    syncRemoteConversations().then(() => {
+      const list = refreshConversations();
+      if (!isInitializedRef.current) {
+        isInitializedRef.current = true;
+        if (list && list.length > 0) {
+          setActiveConversationId(list[0].id);
+          setMessages(chatService.getMessages(list[0].id));
+        } else {
+          setActiveConversationId('draft');
+          setMessages([]);
+        }
+      }
+    });
+  }, [isAuthenticated, refreshConversations, syncRemoteConversations]);
 
   // Load messages when active conversation changes
   useEffect(() => {

@@ -1,0 +1,12 @@
+LensIQ Global Enterprise Financial Projections 2026-2027.
+Authored by The Ambitious Lens Studio by uvRaj.
+Section 2.1: Annual Recurring Revenue (ARR) Trajectory
+For Fiscal Year 2026, LensIQ projected gross ARR is $14.8 Million across enterprise tiers.
+The Q1 ARR stood at $2.9 Million, Q2 expanded to $3.6 Million, and Q3 reached $4.1 Million, representing a year-over-year revenue growth rate of 34.5%.
+
+Section 2.2: Infrastructure Costs and Operating Margins
+Gross margin for the local-first deployment architecture expanded to 82.4%, driven by on-premise PostgreSQL vector indexing which reduced third-party cloud database egress expenses by $420,000 annually.
+The primary AI generation cost on Gemini 3.5 Flash averages $0.00015 per query, keeping blended gross margin well above target thresholds.
+
+Section 2.3: Capital Expenditures and Research Grants
+Total R&D investment committed for 2026 is $2.4 Million, including an academic grant of $350,000 for neuro-symbolic retrieval benchmarks.

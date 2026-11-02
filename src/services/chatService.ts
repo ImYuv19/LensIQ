@@ -25,14 +25,24 @@ class ChatService {
           (c) => (this.messages[c.id] && this.messages[c.id].length > 0) || c.messageCount > 0
         );
       } catch {
-        this.conversations = [...INITIAL_CONVERSATIONS];
-        this.messages = { ...INITIAL_MESSAGES };
+        this.conversations = [];
+        this.messages = {};
       }
     } else {
-      this.conversations = [...INITIAL_CONVERSATIONS];
-      this.messages = { ...INITIAL_MESSAGES };
-      this.persist();
+      this.conversations = [];
+      this.messages = {};
     }
+  }
+
+  public clearLocalCache(): void {
+    if (this.activeAbortController) {
+      this.activeAbortController.abort();
+      this.activeAbortController = null;
+    }
+    this.conversations = [];
+    this.messages = {};
+    localStorage.removeItem(CONV_STORAGE_KEY);
+    localStorage.removeItem(MSG_STORAGE_KEY);
   }
 
   private persist() {
@@ -259,7 +269,10 @@ class ChatService {
           selectedDocIds: attachedDocs.map((d) => d.id),
         },
         (event) => {
-          if (event.type === 'citations' && event.citations) {
+          if (event.type === 'error') {
+            accumulatedText = `⚠️ **AI Service Error:** ${event.error || 'Failed to generate response'}`;
+            onChunk(accumulatedText, []);
+          } else if (event.type === 'citations' && event.citations) {
             streamingCitations = event.citations;
             onChunk(accumulatedText, streamingCitations);
           } else if (event.type === 'text' && event.content) {
@@ -268,16 +281,24 @@ class ChatService {
           }
         },
         (err) => {
-          console.warn('SSE stream error, running local fallback synthesis:', err);
-          this.executeLocalFallbackSynthesis(
+          console.error('SSE stream error:', err);
+          const errorMsg = `⚠️ **AI Service Error:** ${err.message || 'Unable to generate response. Primary provider (Gemini) and fallback provider (Groq) both failed or are unconfigured.'}`;
+          accumulatedText = errorMsg;
+          onChunk(accumulatedText, []);
+          const assistantMsg: ChatMessage = {
+            id: `msg_err_${Date.now()}`,
             conversationId,
-            content,
-            attachedDocs,
+            role: 'assistant',
+            content: errorMsg,
+            createdAt: Date.now(),
             preference,
-            promptVersion,
-            onChunk,
-            onComplete
-          );
+            prompt_version: promptVersion,
+            citations: [],
+            attachedDocIds: attachedDocs.map((d) => d.id),
+          };
+          this.messages[conversationId].push(assistantMsg);
+          this.persist();
+          onComplete(assistantMsg);
         },
         () => {
           const assistantMsg: ChatMessage = {

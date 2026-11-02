@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { DocumentItem } from '../types/document';
 import { documentService } from '../services/documentService';
+import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 
 interface DocumentContextValue {
@@ -28,22 +29,37 @@ const DocumentContext = createContext<DocumentContextValue | undefined>(undefine
 
 export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
-  const [selectedDocIds, setSelectedDocIds] = useState<string[]>(['doc_fin_q3']);
+  const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const [activePreviewDoc, setActivePreviewDoc] = useState<DocumentItem | null>(null);
   const [activePreviewPage, setActivePreviewPage] = useState<number>(1);
   const [activeHighlight, setActiveHighlight] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadProgressMap, setUploadProgressMap] = useState<Record<string, number>>({});
 
+  const { isAuthenticated } = useAuth();
   const { showToast } = useToast();
 
-  const refreshDocuments = useCallback(() => {
-    setDocuments(documentService.getDocuments());
-  }, []);
+  const refreshDocuments = useCallback(async () => {
+    if (!isAuthenticated) {
+      setDocuments([]);
+      return;
+    }
+    const docs = await documentService.fetchRemoteDocuments();
+    setDocuments([...docs]);
+  }, [isAuthenticated]);
 
   useEffect(() => {
-    refreshDocuments();
-  }, [refreshDocuments]);
+    if (!isAuthenticated) {
+      documentService.clearLocalCache();
+      setDocuments([]);
+      setSelectedDocIds([]);
+      setActivePreviewDoc(null);
+      setActivePreviewPage(1);
+      setActiveHighlight(null);
+    } else {
+      refreshDocuments();
+    }
+  }, [isAuthenticated, refreshDocuments]);
 
   const toggleDocSelection = (id: string) => {
     const doc = documents.find((d) => d.id === id);

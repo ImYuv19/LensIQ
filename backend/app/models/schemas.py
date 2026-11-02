@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 # --- Auth & Profile ---
@@ -15,6 +15,23 @@ class UserProfile(BaseModel):
     daily_uploads_count: int = 0
     last_quota_reset_date: Optional[str] = None
     created_at: Optional[datetime] = None
+
+class SignupRequest(BaseModel):
+    email: str = Field(min_length=3, description="User email address")
+    password: str = Field(min_length=6, description="Password must be at least 6 characters")
+    full_name: Optional[str] = ""
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class GoogleAuthRequest(BaseModel):
+    id_token: str
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserProfile
 
 class ProfileUpdateRequest(BaseModel):
     full_name: Optional[str] = None

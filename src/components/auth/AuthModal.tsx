@@ -87,9 +87,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const handleGoogleSignIn = async () => {
     setLoading(true);
+    setStatusMessage(null);
     try {
+      const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+      if (!googleClientId) {
+        setStatusMessage({
+          text: 'Google Sign-In requires configuration: Please add VITE_GOOGLE_CLIENT_ID to your environment variables and GOOGLE_CLIENT_ID to backend/.env to connect Google accounts.',
+          type: 'error',
+        });
+        return;
+      }
       await signInWithGoogle();
       onClose();
+    } catch (err: any) {
+      setStatusMessage({
+        text: err?.message || 'Google Sign-In failed. Please try again or use email login.',
+        type: 'error',
+      });
     } finally {
       setLoading(false);
     }

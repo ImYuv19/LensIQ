@@ -9,7 +9,6 @@ import {
   User,
   Check,
   Edit2,
-  ExternalLink,
 } from 'lucide-react';
 import { useChat } from '../../context/ChatContext';
 import { useAuth } from '../../context/AuthContext';
@@ -206,17 +205,6 @@ export const TopNav: React.FC<TopNavProps> = ({
                 >
                   <Settings className="w-4 h-4 text-[#8E95A2]" />
                   <span>Settings & Usage</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setIsProfileMenuOpen(false);
-                    onOpenLanding();
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs text-[#BAC0CC] hover:text-white hover:bg-[#181B1F] transition-colors text-left"
-                >
-                  <ExternalLink className="w-4 h-4 text-[#8E95A2]" />
-                  <span>Landing Page</span>
                 </button>
               </div>
 

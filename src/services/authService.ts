@@ -1,7 +1,6 @@
 import { UserProfile } from '../types/user';
-import { INITIAL_USER } from './mockData';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { fetchApi } from './apiClient';
+import { fetchApi, getAuthToken } from './apiClient';
 
 const AUTH_USER_KEY = 'lensiq_auth_user_v1';
 
@@ -10,15 +9,17 @@ class AuthService {
 
   constructor() {
     const saved = localStorage.getItem(AUTH_USER_KEY);
-    if (saved) {
+    const token = getAuthToken();
+    if (saved && token) {
       try {
         this.currentUser = JSON.parse(saved);
       } catch {
-        this.currentUser = INITIAL_USER;
+        this.currentUser = null;
+        localStorage.removeItem(AUTH_USER_KEY);
       }
     } else {
-      this.currentUser = INITIAL_USER;
-      this.persist();
+      this.currentUser = null;
+      localStorage.removeItem(AUTH_USER_KEY);
     }
 
     // If Supabase client configured, listen to auth state changes
@@ -48,10 +49,10 @@ class AuthService {
       if (profile && profile.id) {
         const updatedUser: UserProfile = {
           id: profile.id,
-          name: profile.full_name || this.currentUser?.name || 'Alex Morgan',
-          email: profile.email || this.currentUser?.email || 'alex.morgan@lensiq.ai',
+          name: profile.full_name || this.currentUser?.name || 'LensIQ User',
+          email: profile.email || this.currentUser?.email || '',
           avatarUrl: profile.avatar_url || this.currentUser?.avatarUrl,
-          plan: 'LensIQ Free Plan',
+          plan: profile.plan_tier || 'LensIQ Free Plan',
           promptVersion: this.currentUser?.promptVersion || 'v2',
           joinedAt: this.currentUser?.joinedAt || Date.now(),
           usage: {
@@ -78,66 +79,112 @@ class AuthService {
   }
 
   public isAuthenticated(): boolean {
-    return this.currentUser !== null;
+    return this.currentUser !== null && Boolean(getAuthToken());
   }
 
   public async signIn(email: string, password: string): Promise<UserProfile> {
-    if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
+    try {
+      const res = await fetchApi<{ access_token: string; token_type: string; user: any }>('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: email.trim(), password }),
       });
-      if (error) throw new Error(error.message);
-      if (data.session) {
-        localStorage.setItem('lensiq_supabase_token', data.session.access_token);
+      if (res?.access_token) {
+        localStorage.setItem('lensiq_auth_token', res.access_token);
         const synced = await this.syncRemoteProfile();
         if (synced) return synced;
-      }
-    }
 
-    const user: UserProfile = {
-      ...INITIAL_USER,
-      email: email.trim(),
-      name: email.split('@')[0].replace('.', ' ').replace(/^./, (str) => str.toUpperCase()),
-    };
-    this.currentUser = user;
-    this.persist();
-    return user;
+        if (res.user) {
+          const user: UserProfile = {
+            id: res.user.id,
+            name: res.user.full_name || email.split('@')[0],
+            email: res.user.email,
+            avatarUrl: res.user.avatar_url,
+            plan: res.user.plan_tier || 'LensIQ Free Plan',
+            promptVersion: 'v2',
+            joinedAt: Date.now(),
+            usage: {
+              questionsAskedToday: res.user.daily_questions_count || 0,
+              questionsDailyLimit: 20,
+              uploadsToday: res.user.daily_uploads_count || 0,
+              uploadsDailyLimit: 10,
+              storageUsedBytes: res.user.storage_used_bytes || 0,
+              storageLimitBytes: 100 * 1024 * 1024,
+            },
+          };
+          this.currentUser = user;
+          this.persist();
+          return user;
+        }
+      }
+      throw new Error('Authentication failed: No access token received.');
+    } catch (apiErr: any) {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (!error && data.session) {
+          localStorage.setItem('lensiq_supabase_token', data.session.access_token);
+          const synced = await this.syncRemoteProfile();
+          if (synced) return synced;
+        }
+      }
+      throw new Error(apiErr.message || 'Invalid email or password.');
+    }
   }
 
   public async signUp(name: string, email: string, password: string): Promise<UserProfile> {
-    if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-          data: { full_name: name.trim() },
-        },
+    try {
+      const res = await fetchApi<{ access_token: string; token_type: string; user: any }>('/auth/signup', {
+        method: 'POST',
+        body: JSON.stringify({ email: email.trim(), password, full_name: name.trim() }),
       });
-      if (error) throw new Error(error.message);
-      if (data.session) {
-        localStorage.setItem('lensiq_supabase_token', data.session.access_token);
-      }
-    }
+      if (res?.access_token) {
+        localStorage.setItem('lensiq_auth_token', res.access_token);
+        const synced = await this.syncRemoteProfile();
+        if (synced) return synced;
 
-    const user: UserProfile = {
-      ...INITIAL_USER,
-      id: `usr_${Date.now()}`,
-      name: name.trim(),
-      email: email.trim(),
-      joinedAt: Date.now(),
-      usage: {
-        questionsAskedToday: 0,
-        questionsDailyLimit: 20,
-        uploadsToday: 0,
-        uploadsDailyLimit: 10,
-        storageUsedBytes: 0,
-        storageLimitBytes: 100 * 1024 * 1024,
-      },
-    };
-    this.currentUser = user;
-    this.persist();
-    return user;
+        if (res.user) {
+          const user: UserProfile = {
+            id: res.user.id,
+            name: res.user.full_name || name.trim(),
+            email: res.user.email,
+            avatarUrl: res.user.avatar_url,
+            plan: res.user.plan_tier || 'LensIQ Free Plan',
+            promptVersion: 'v2',
+            joinedAt: Date.now(),
+            usage: {
+              questionsAskedToday: 0,
+              questionsDailyLimit: 20,
+              uploadsToday: 0,
+              uploadsDailyLimit: 10,
+              storageUsedBytes: 0,
+              storageLimitBytes: 100 * 1024 * 1024,
+            },
+          };
+          this.currentUser = user;
+          this.persist();
+          return user;
+        }
+      }
+      throw new Error('Registration failed: No access token received.');
+    } catch (apiErr: any) {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: {
+            data: { full_name: name.trim() },
+          },
+        });
+        if (!error && data.session) {
+          localStorage.setItem('lensiq_supabase_token', data.session.access_token);
+          const synced = await this.syncRemoteProfile();
+          if (synced) return synced;
+        }
+      }
+      throw new Error(apiErr.message || 'Failed to create account.');
+    }
   }
 
   public async forgotPassword(email: string): Promise<{ success: boolean; message: string }> {
@@ -162,7 +209,45 @@ class AuthService {
     };
   }
 
-  public async signInWithGoogle(): Promise<UserProfile> {
+  public async signInWithGoogle(idToken?: string): Promise<UserProfile> {
+    // 1. If real Google ID token is provided from Google Identity Services
+    if (idToken) {
+      const res = await fetchApi<{ access_token: string; token_type: string; user: any }>('/auth/google', {
+        method: 'POST',
+        body: JSON.stringify({ id_token: idToken }),
+      });
+      if (res?.access_token) {
+        localStorage.setItem('lensiq_auth_token', res.access_token);
+        const synced = await this.syncRemoteProfile();
+        if (synced) return synced;
+
+        if (res.user) {
+          const user: UserProfile = {
+            id: res.user.id,
+            name: res.user.full_name,
+            email: res.user.email,
+            avatarUrl: res.user.avatar_url,
+            plan: res.user.plan_tier || 'LensIQ Free Plan',
+            promptVersion: 'v2',
+            joinedAt: Date.now(),
+            usage: {
+              questionsAskedToday: res.user.daily_questions_count || 0,
+              questionsDailyLimit: 20,
+              uploadsToday: res.user.daily_uploads_count || 0,
+              uploadsDailyLimit: 10,
+              storageUsedBytes: res.user.storage_used_bytes || 0,
+              storageLimitBytes: 100 * 1024 * 1024,
+            },
+          };
+          this.currentUser = user;
+          this.persist();
+          return user;
+        }
+      }
+      throw new Error('Google Sign-In failed: No access token received from server.');
+    }
+
+    // 2. Fallback to Supabase OAuth if configured
     if (isSupabaseConfigured && supabase) {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -171,25 +256,30 @@ class AuthService {
         },
       });
       if (error) throw new Error(error.message);
+      return null as any;
     }
 
-    const user: UserProfile = {
-      ...INITIAL_USER,
-      name: 'Alex Morgan (Google)',
-      email: 'alex.morgan.google@gmail.com',
-    };
-    this.currentUser = user;
-    this.persist();
-    return user;
+    // 3. Neither Google ID token nor Supabase Google OAuth configured
+    throw new Error(
+      'Google OAuth is not configured. Please configure VITE_GOOGLE_CLIENT_ID in your environment to enable Google Authentication.'
+    );
   }
 
   public async signOut(): Promise<void> {
     if (isSupabaseConfigured && supabase) {
-      await supabase.auth.signOut();
+      try {
+        await supabase.auth.signOut();
+      } catch (err) {
+        console.warn('Supabase sign out note:', err);
+      }
     }
+    localStorage.removeItem('lensiq_auth_token');
     localStorage.removeItem('lensiq_supabase_token');
+    localStorage.removeItem(AUTH_USER_KEY);
+    localStorage.removeItem('lensiq_documents_v1');
+    localStorage.removeItem('lensiq_conversations_v1');
+    localStorage.removeItem('lensiq_messages_v1');
     this.currentUser = null;
-    this.persist();
   }
 
   public updateUser(updates: Partial<UserProfile>): UserProfile | null {

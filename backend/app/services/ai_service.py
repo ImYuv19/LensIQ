@@ -1,10 +1,10 @@
 import time
 import json
+import asyncio
 import logging
 from typing import AsyncGenerator, List, Dict, Any, Tuple
 import google.generativeai as genai
 from groq import Groq
-from openai import OpenAI
 from backend.app.config import settings
 from backend.app.services.retrieval_service import RetrievedChunk
 from backend.app.models.schemas import Citation
@@ -12,10 +12,15 @@ from backend.app.models.schemas import Citation
 logger = logging.getLogger(__name__)
 
 class AIProviderService:
+    """
+    RAG AI Synthesis Service with strictly bounded fallback:
+    1. Primary: Google Gemini (gemini-1.5-flash)
+    2. Fallback: Groq (llama-3.3-70b-versatile)
+    Never fabricates answers or returns mock data when providers fail.
+    """
     def __init__(self):
         self.gemini_client = None
         self.groq_client = None
-        self.openai_client = None
         self._init_clients()
 
     def _init_clients(self):
@@ -23,20 +28,16 @@ class AIProviderService:
             try:
                 genai.configure(api_key=settings.GEMINI_API_KEY)
                 self.gemini_client = genai.GenerativeModel(settings.GEMINI_MODEL)
+                logger.info(f"Initialized Gemini primary AI generator ({settings.GEMINI_MODEL})")
             except Exception as e:
                 logger.error(f"Failed to init Gemini client: {e}")
 
         if settings.GROQ_API_KEY:
             try:
                 self.groq_client = Groq(api_key=settings.GROQ_API_KEY)
+                logger.info(f"Initialized Groq fallback AI generator ({settings.GROQ_MODEL})")
             except Exception as e:
                 logger.error(f"Failed to init Groq client: {e}")
-
-        if settings.OPENAI_API_KEY:
-            try:
-                self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
-            except Exception as e:
-                logger.error(f"Failed to init OpenAI client: {e}")
 
     def build_system_prompt(self, prompt_version: str, preference: str) -> str:
         """
@@ -82,8 +83,7 @@ Execute multi-hop reasoning and cross-document reconciliation:
         for idx, chunk in enumerate(chunks):
             citation_num = idx + 1
             citation_id = f"cit_{int(time.time() * 1000)}_{citation_num}"
-            
-            # Construct verified citation record
+
             citations.append(Citation(
                 id=citation_id,
                 docId=chunk.document_id,
@@ -107,8 +107,8 @@ Execute multi-hop reasoning and cross-document reconciliation:
         prompt_version: str = "v2"
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Executes bounded fallback: Gemini -> Groq -> OpenAI -> Grounded Mock.
-        Yields chunk dictionaries containing token delta or citations.
+        Executes bounded fallback: Gemini (Primary) -> Groq (Fallback).
+        Never returns mock, deterministic, or fabricated answers when providers fail.
         """
         context_text, citations = self.build_context_and_citations(chunks)
         system_instruction = self.build_system_prompt(prompt_version, preference)
@@ -124,7 +124,13 @@ Provide a verified, factual response grounded in the context above. Cite using [
         # Send citations metadata event first
         yield {"type": "citations", "citations": [c.model_dump() for c in citations]}
 
-        # 1. Primary: Gemini
+        # If clients were uninitialized at startup, try refreshing in case keys were added
+        if not self.gemini_client and settings.GEMINI_API_KEY:
+            self._init_clients()
+        if not self.groq_client and settings.GROQ_API_KEY:
+            self._init_clients()
+
+        # 1. Primary: Gemini (gemini-1.5-flash)
         if self.gemini_client:
             try:
                 logger.info("Generating response with primary provider: Gemini")
@@ -132,18 +138,22 @@ Provide a verified, factual response grounded in the context above. Cite using [
                     f"{system_instruction}\n\n{user_prompt}",
                     stream=True
                 )
+                emitted_tokens = False
                 for chunk in response:
                     if chunk.text:
+                        emitted_tokens = True
                         yield {"type": "text", "content": chunk.text}
-                yield {"type": "provider", "provider": "gemini"}
-                return
+                        await asyncio.sleep(0.01)
+                if emitted_tokens:
+                    yield {"type": "provider", "provider": "gemini"}
+                    return
             except Exception as e:
                 logger.warning(f"Primary provider (Gemini) failed: {e}. Falling back to Groq.")
 
-        # 2. Backup 1: Groq
+        # 2. Fallback: Groq
         if self.groq_client:
             try:
-                logger.info("Generating response with backup provider 1: Groq")
+                logger.info("Generating response with fallback provider: Groq")
                 completion = self.groq_client.chat.completions.create(
                     model=settings.GROQ_MODEL,
                     messages=[
@@ -152,56 +162,25 @@ Provide a verified, factual response grounded in the context above. Cite using [
                     ],
                     stream=True
                 )
+                emitted_tokens = False
                 for chunk in completion:
                     delta = chunk.choices[0].delta.content or ""
                     if delta:
+                        emitted_tokens = True
                         yield {"type": "text", "content": delta}
-                yield {"type": "provider", "provider": "groq"}
-                return
+                        await asyncio.sleep(0.01)
+                if emitted_tokens:
+                    yield {"type": "provider", "provider": "groq"}
+                    return
             except Exception as e:
-                logger.warning(f"Backup provider 1 (Groq) failed: {e}. Falling back to OpenAI.")
+                logger.error(f"Fallback provider (Groq) failed: {e}.")
 
-        # 3. Backup 2: OpenAI
-        if self.openai_client:
-            try:
-                logger.info("Generating response with backup provider 2: OpenAI")
-                stream = self.openai_client.chat.completions.create(
-                    model=settings.OPENAI_MODEL,
-                    messages=[
-                        {"role": "system", "content": system_instruction},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    stream=True
-                )
-                for chunk in stream:
-                    delta = chunk.choices[0].delta.content or ""
-                    if delta:
-                        yield {"type": "text", "content": delta}
-                yield {"type": "provider", "provider": "openai"}
-                return
-            except Exception as e:
-                logger.warning(f"Backup provider 2 (OpenAI) failed: {e}. Using deterministic fallback.")
-
-        # 4. Deterministic Grounded Synthesis (for offline or key-less development environments)
-        primary_doc = chunks[0].document_name if chunks else "Selected Document"
-        
-        paragraphs = [
-            f"Based on **{primary_doc}** and your attached documents, here is the verified breakdown:\n\n",
-            f"### Verified Insights\n",
-            f"- **Primary Finding**: According to the documented provisions in **{primary_doc}**, the operational and contractual parameters strictly satisfy the required performance criteria [[1]].\n",
-            f"- **Grounding Clause**: In section reference coordinates (Page {chunks[0].page_number if chunks else 1}), all verified metrics adhere directly to the documented terms [[1]].\n",
-        ]
-        if len(chunks) > 1:
-            sec_doc = chunks[1].document_name
-            paragraphs.append(f"- **Secondary Cross-Check**: As confirmed in **{sec_doc}** (Page {chunks[1].page_number}), operational boundaries and compliance benchmarks remain within agreed limits [[2]].\n")
-
-        paragraphs.append("\nAll claims cited above correlate directly to the audited source segments in your selected documents.")
-
-        for p in paragraphs:
-            for word in p.split(" "):
-                yield {"type": "text", "content": word + " "}
-                time.sleep(0.015)
-        yield {"type": "provider", "provider": "deterministic-engine"}
+        # 3. Clear Error Reporting: No mock data or hallucinated answers
+        error_msg = (
+            "AI service unavailable. Primary provider (Gemini) and fallback provider (Groq) "
+            "both failed or are unconfigured. Please check GEMINI_API_KEY and GROQ_API_KEY."
+        )
+        logger.error(error_msg)
+        yield {"type": "error", "error": error_msg}
 
 ai_service = AIProviderService()
-
